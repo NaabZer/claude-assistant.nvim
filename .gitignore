@@ -1,0 +1,12 @@
+.claude-plan/
+.claude-plan-archive/
+
+# Neovim / Lua
+doc/tags
+*.luac
+
+# Editor swap files
+*.swp
+*.swo
+*.swn
+*~
