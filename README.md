@@ -55,6 +55,10 @@ require("claude-assistant").setup({
     explain = "<leader>ce",
     paste = "<leader>cp",
   },
+  reference = {
+    linewise = "@%s#L%s",     -- whole-line selection: sent bare, alone (path, lines)
+    charwise = "( @%s#L%s )", -- partial selection: appended after the code (path, lines)
+  },
   role_prompt = nil,       -- nil => use the built-in default assistant role
   manage_claudecode = false, -- opt-in: let this plugin call claudecode.setup() for you
   claudecode = {},         -- passthrough opts merged into claudecode.setup() (see below)
@@ -69,6 +73,8 @@ require("claude-assistant").setup({
 | `keymaps.review` | `string` | `"<leader>cr"` | `lhs` used for the review action when `keymaps.enable = true`. |
 | `keymaps.explain` | `string` | `"<leader>ce"` | `lhs` used for the explain action when `keymaps.enable = true`. |
 | `keymaps.paste` | `string` | `"<leader>cp"` | `lhs` used for the paste action when `keymaps.enable = true`. |
+| `reference.linewise` | `string` | `"@%s#L%s"` | Format for the file reference sent for a **whole-line** selection (`%s` = workspace-relative path, then line spec). Sent bare so Claude Code expands the `@`-mention and reads those lines. |
+| `reference.charwise` | `string` | `"( @%s#L%s )"` | Format for the reference **appended after** a partial (charwise) selection's code. The spaces inside the parens matter — a tight `(@file#L1)` is not expanded by Claude Code, but `( @file#L1 )` is. |
 | `role_prompt` | `string \| nil` | `nil` | Overrides the assistant role text used with `--append-system-prompt`. `nil` uses the plugin's built-in default role. Only has an effect if you use the role injection described below. |
 | `manage_claudecode` | `boolean` | `false` | Opt-in. When `true`, the plugin calls `claudecode.setup()` for you, wiring a `terminal_cmd` that injects the assistant role on every Claude launch. |
 | `claudecode` | `table` | `{}` | Passthrough table merged into `claudecode.setup()` when `manage_claudecode = true` (see below). Ignored otherwise. |
@@ -135,11 +141,32 @@ automatically when invoked from visual mode:
 
 | Command | Behavior |
 | --- | --- |
-| `:ClaudeAssistantReview` | Sends `prompts.review` + the selection, submitted immediately. |
+| `:ClaudeAssistantReview` | Sends `prompts.review` + the selection (as a reference or wrapped code — see below), submitted immediately. |
 | `:ClaudeAssistantExplain` | Sends `prompts.explain` + the selection, submitted immediately. |
-| `:ClaudeAssistantPaste` | Inserts the raw selection into the Claude prompt **without** submitting, and focuses the pane so you can type your own question around it. |
+| `:ClaudeAssistantPaste` | Inserts the selection into the Claude prompt **without** submitting (no instruction prefix), and focuses the pane so you can type your own question around it. |
 
 Example: `:'<,'>ClaudeAssistantReview`.
+
+### What gets sent (line reference vs. code)
+
+What lands in the Claude prompt depends on the **kind** of selection, so Claude
+gets the most useful context:
+
+- **Whole-line selections** (a linewise visual selection, or an operator + a
+  linewise motion like `ip`) send just a file reference, e.g.
+  `@lua/config/keymaps.lua#L54-58`. Claude Code expands the `@`-mention and reads
+  those exact lines from the file, so it can also look at the surrounding code.
+- **Partial (charwise) selections** send the selected text itself, wrapped as
+  code — inline `` `code` `` for one line, a fenced block for several — followed
+  by the reference in parentheses, e.g. `` `vim.keymap.set` ( @keymaps.lua#L54 ) ``,
+  so Claude sees the exact fragment *and* where it came from.
+- In an **unnamed buffer** (no file to reference) the selection is always sent as
+  wrapped text, with no reference.
+
+This applies to all three actions; `:ClaudeAssistantPaste` just skips the
+instruction prefix and leaves the result unsubmitted so you can type around it.
+The reference formats are configurable via `reference.linewise` /
+`reference.charwise` (see [Configuration](#configuration)).
 
 ### `<Plug>` mappings
 
