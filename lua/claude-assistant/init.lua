@@ -4,8 +4,8 @@ local config = require("claude-assistant.config")
 
 function M.setup(opts)
   -- hard dependency + version guards
-  if vim.fn.has("nvim-0.7") == 0 then
-    vim.notify("[claude-assistant] requires Neovim >= 0.7", vim.log.levels.ERROR)
+  if vim.fn.has("nvim-0.10") == 0 then
+    vim.notify("[claude-assistant] requires Neovim >= 0.10", vim.log.levels.ERROR)
     return
   end
   local ok = pcall(require, "claudecode")
