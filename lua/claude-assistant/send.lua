@@ -62,6 +62,14 @@ local function do_send(action, opts)
   local sep = body:find("\n", 1, true) and "\n" or " "
   local payload = prefix and (prefix .. sep .. body) or body
 
+  -- claudecode.send_to_terminal only bracketed-pastes MULTI-line sends; a single-line
+  -- payload is typed char-by-char, so an @-mention in it opens Claude Code's interactive
+  -- file-mention menu (which drops characters and eats the submit Enter). Guarantee a
+  -- newline so the whole payload is bracketed-pasted as literal text and submits cleanly.
+  if not payload:find("\n", 1, true) then
+    payload = payload .. "\n"
+  end
+
   local terminal = require("claudecode.terminal")
   local existed = terminal.get_active_terminal_bufnr() ~= nil
   terminal.ensure_visible() -- create/show the Claude pane without stealing focus
