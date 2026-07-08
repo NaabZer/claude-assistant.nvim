@@ -29,7 +29,7 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 ```lua
 {
-  "naabzer/nvim-claude-assistant", -- adjust to the actual repo path
+  "NaabZer/claude-assistant.nvim",
   dependencies = { "coder/claudecode.nvim" },
   opts = {},
 }

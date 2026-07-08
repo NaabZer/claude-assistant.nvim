@@ -1,5 +1,6 @@
 .claude-plan/
 .claude-plan-archive/
+.claude/worktrees/
 
 # Neovim / Lua
 doc/tags
