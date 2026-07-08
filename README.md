@@ -1,31 +1,41 @@
 # claude-assistant.nvim
 
-An **assistant companion plugin** for Neovim, built on top of
-[coder/claudecode.nvim](https://github.com/coder/claudecode.nvim).
+A vibecoded nvim plugin to go from vibe-coding to LLM-assisted coding.
 
-You write your own code. `claude-assistant.nvim` sends a visual selection, or
-a normal-mode motion / text object, to a running Claude Code pane as a
-composed review/explain prompt — or pastes it into the prompt unsubmitted so
-you can ask your own question around it. Claude is constrained to an
-assistant role: it reviews, explains, and answers, but does not autonomously
-edit your buffers. Nothing this plugin does ever touches your files directly;
-`claudecode.nvim` is the transport, this plugin only composes prompts and
-sends them to the Claude pane.
+I love vim, and recently I've been doing nothing but vibe-coding. I want to go back to
+actually writing code, but with the convenience that Claude Code gives you, without ever
+having to leave vim (and hopefully, without really having to type anything into the Claude
+Code prompt).
+
+The aspiration is having a Claude Code instance that acts more like a pair programmer
+assisting you, rather than someone that writes all the code and leaves you the boring task
+of reviewing it. No more Stack Overflow lookups, fewer bugs discovered at PR review time,
+more understanding of your own code, and most importantly, more time spent *inside vim*.
+
+It's built on top of [coder/claudecode.nvim](https://github.com/coder/claudecode.nvim),
+which does the actual transport (the Claude Code terminal, and sending things to it). This
+plugin is the thin layer on top: it turns a selection or a motion into a composed prompt and
+keeps Claude in an assistant role. You stay the one writing the code — nothing here ever
+touches your buffers.
+
+## Status
+
+Phase 1 is done and daily-usable. Select some code (or hit an operator + a motion) and send
+it to Claude as a *review* or *explain* prompt, or just *paste* it into the prompt to ask
+your own question around it. Everything past that is planned — see [Roadmap](#roadmap).
 
 ## Requirements
 
-- [coder/claudecode.nvim](https://github.com/coder/claudecode.nvim) — this is
-  the transport layer; `claude-assistant.nvim` has no functionality without
-  it.
-- Neovim >= 0.10 (the plugin uses `vim.fn.getregion()` to extract visual /
-  motion ranges).
-- claudecode.nvim's terminal provider must be `native` or `snacks`. Sending is
-  inert on the `external` and `none` providers, since there is no in-editor
-  pane for the plugin to write into.
+- [coder/claudecode.nvim](https://github.com/coder/claudecode.nvim) — the transport layer.
+  There is no functionality without it.
+- Neovim >= 0.10 (it uses `vim.fn.getregion()` to pull out visual/motion ranges).
+- claudecode's terminal provider set to `native` or `snacks`. Sending is inert on the
+  `external` and `none` providers, since Claude runs outside nvim there and there's no pane
+  to write into.
 
 ## Installation
 
-Using [lazy.nvim](https://github.com/folke/lazy.nvim):
+With [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 ```lua
 {
@@ -35,13 +45,48 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
 }
 ```
 
-`opts = {}` (or an explicit `require("claude-assistant").setup({})` call) is
-required — `setup()` is what registers the `:ClaudeAssistant*` commands and
-`<Plug>` mappings. Without calling it, the plugin does nothing.
+`opts = {}` (or an explicit `require("claude-assistant").setup({})`) is required — that's
+what registers the `:ClaudeAssistant*` commands and the `<Plug>` mappings. Without it the
+plugin does nothing.
+
+## Usage
+
+Three actions. Each one works two ways: from a **visual selection**, or as a normal-mode
+**operator + motion / text-object** (hit the mapping, then supply a motion like `ip` or `2j`).
+
+| Command | What it does |
+| --- | --- |
+| `:ClaudeAssistantReview` | Sends the selection as a "review this for bugs and logic flaws" prompt, submitted. |
+| `:ClaudeAssistantExplain` | Sends it as an "explain this and give usage examples" prompt, submitted. |
+| `:ClaudeAssistantPaste` | Drops the selection into the prompt **without** submitting, and focuses the pane so you can ask your own thing. |
+
+Default keybinds are off. Either map the `<Plug>` mappings yourself (in normal and visual
+mode)...
+
+```lua
+vim.keymap.set({ "n", "x" }, "<leader>cr", "<Plug>(ClaudeAssistantReview)")
+vim.keymap.set({ "n", "x" }, "<leader>ce", "<Plug>(ClaudeAssistantExplain)")
+vim.keymap.set({ "n", "x" }, "<leader>cp", "<Plug>(ClaudeAssistantPaste)")
+```
+
+...or set `keymaps.enable = true` to get those defaults installed for you.
+
+### What actually gets sent
+
+It depends on the *kind* of selection, so Claude gets the most useful context:
+
+- **Whole-line selection** (linewise visual, or an operator + a linewise motion like `ip`) →
+  just a file reference, e.g. `@lua/config/keymaps.lua#L54-58`. Claude Code expands the
+  `@`-mention and reads those exact lines itself (so it can see the surrounding code too).
+- **Partial (charwise) selection** → the selected text wrapped as code (inline backticks for
+  one line, a fenced block for several), followed by the reference in parens, e.g.
+  `` `vim.keymap.set` ( @keymaps.lua#L54 ) `` — so Claude gets the exact fragment *and* where
+  it's from.
+- **Unnamed buffer** (nothing to reference) → just the wrapped text.
 
 ## Configuration
 
-Full list of options with their defaults:
+Defaults:
 
 ```lua
 require("claude-assistant").setup({
@@ -50,162 +95,65 @@ require("claude-assistant").setup({
     explain = "Explain this and give usage examples:",
   },
   keymaps = {
-    enable = false,     -- do not install the default keymaps below
+    enable = false,            -- install the default <leader>c{r,e,p} maps
     review = "<leader>cr",
     explain = "<leader>ce",
     paste = "<leader>cp",
   },
   reference = {
-    linewise = "@%s#L%s",     -- whole-line selection: sent bare, alone (path, lines)
-    charwise = "( @%s#L%s )", -- partial selection: appended after the code (path, lines)
+    linewise = "@%s#L%s",      -- whole-line selection: sent bare (path, lines)
+    charwise = "( @%s#L%s )",  -- partial selection: appended after the code (path, lines)
   },
-  role_prompt = nil,       -- nil => use the built-in default assistant role
-  manage_claudecode = false, -- opt-in: let this plugin call claudecode.setup() for you
-  claudecode = {},         -- passthrough opts merged into claudecode.setup() (see below)
+  role_prompt = nil,           -- nil => built-in default assistant role
+  manage_claudecode = false,   -- let this plugin call claudecode.setup() for you
+  claudecode = {},             -- passthrough opts, merged when manage_claudecode = true
 })
 ```
 
-| Option | Type | Default | Description |
-| --- | --- | --- | --- |
-| `prompts.review` | `string` | `"Review this for bugs and logic flaws:"` | Instruction prefix prepended to the sent text for `:ClaudeAssistantReview`. |
-| `prompts.explain` | `string` | `"Explain this and give usage examples:"` | Instruction prefix prepended to the sent text for `:ClaudeAssistantExplain`. |
-| `keymaps.enable` | `boolean` | `false` | Whether to install the default keymaps below on top of the `<Plug>` mappings. |
-| `keymaps.review` | `string` | `"<leader>cr"` | `lhs` used for the review action when `keymaps.enable = true`. |
-| `keymaps.explain` | `string` | `"<leader>ce"` | `lhs` used for the explain action when `keymaps.enable = true`. |
-| `keymaps.paste` | `string` | `"<leader>cp"` | `lhs` used for the paste action when `keymaps.enable = true`. |
-| `reference.linewise` | `string` | `"@%s#L%s"` | Format for the file reference sent for a **whole-line** selection (`%s` = workspace-relative path, then line spec). Sent bare so Claude Code expands the `@`-mention and reads those lines. |
-| `reference.charwise` | `string` | `"( @%s#L%s )"` | Format for the reference **appended after** a partial (charwise) selection's code. The spaces inside the parens matter — a tight `(@file#L1)` is not expanded by Claude Code, but `( @file#L1 )` is. |
-| `role_prompt` | `string \| nil` | `nil` | Overrides the assistant role text used with `--append-system-prompt`. `nil` uses the plugin's built-in default role. Only has an effect if you use the role injection described below. |
-| `manage_claudecode` | `boolean` | `false` | Opt-in. When `true`, the plugin calls `claudecode.setup()` for you, wiring a `terminal_cmd` that injects the assistant role on every Claude launch. |
-| `claudecode` | `table` | `{}` | Passthrough table merged into `claudecode.setup()` when `manage_claudecode = true` (see below). Ignored otherwise. |
+Change `prompts.review` / `prompts.explain` to reword the instruction prefixes. The spaces
+inside `reference.charwise`'s parens matter — a tight `(@file#L1)` isn't expanded by Claude
+Code, but `( @file#L1 )` is.
 
-`prompts.review` and `prompts.explain` are only used by their respective
-commands; `:ClaudeAssistantPaste` sends the raw selection with no prefix (see
-[Usage](#usage)).
+## Assistant role
 
-## Assistant role injection
+The "review and explain, don't drive my code" role is injected with
+`claude --append-system-prompt <role>`, baked into the command claudecode uses to launch
+Claude. This is enforced per-launch at the process level, so it can't be quietly ignored
+mid-session the way a skill or `CLAUDE.md` could.
 
-Claude's assistant role — "review, explain, don't auto-edit" — is injected
-via `claude --append-system-prompt <role>` on the `terminal_cmd` that
-claudecode.nvim uses to spawn Claude. This uses `--append-system-prompt`
-rather than a Claude Code skill or `CLAUDE.md` entry because it is enforced
-at the process level, deterministically, on every single launch: a skill or
-`CLAUDE.md` file can be read, ignored, or superseded once a session starts,
-but there's no way to *force* a session to load a given role the moment it
-starts other than baking it into the launch command itself.
-
-There are two ways to wire this up:
-
-### (a) Opt-in: let the plugin own claudecode's `terminal_cmd`
+Two ways to wire it:
 
 ```lua
+-- (a) let the plugin own claudecode's setup
 require("claude-assistant").setup({
   manage_claudecode = true,
-  claudecode = {
-    -- any other claudecode.nvim options you want, e.g.:
-    terminal = { provider = "native" },
-  },
-  role_prompt = "You are a strict, terse code reviewer.", -- optional override
+  claudecode = { terminal = { provider = "native" } },
+  role_prompt = "You are a strict, terse code reviewer.",  -- optional override
 })
-```
 
-When `manage_claudecode = true`, `claude-assistant.nvim` calls
-`claudecode.setup()` itself, merging your `claudecode` table with a
-`terminal_cmd` that injects the role (using `role_prompt` if set, otherwise
-the built-in default role). Do **not** also call `claudecode.setup()`
-yourself in this mode — let the plugin call it once, for you.
-
-### (b) Manual: wire your own `claudecode.setup()`
-
-If you'd rather keep full control of `claudecode.setup()`, leave
-`manage_claudecode = false` (the default) and compose the `terminal_cmd`
-yourself:
-
-```lua
+-- (b) or compose the terminal_cmd yourself
 require("claudecode").setup({
   terminal_cmd = require("claude-assistant.role").terminal_cmd(),
   terminal = { provider = "native" },
 })
 ```
 
-`require("claude-assistant").terminal_cmd()` (zero-arg) is also available as
-a convenience accessor — it returns the same composed command string, using
-whatever `role_prompt` you passed to `claude-assistant.nvim`'s own `setup()`.
+## Roadmap
 
-## Usage
+Rough plan, in the order I actually care about them. Phase 1 is done; the rest is where I'm
+headed.
 
-### Commands
+- **Phase 2 — Memory.** An evolving, per-repo/per-worktree memory the assistant reads at the
+  start of every session: what I was mid-way through, decisions I made, things I keep getting
+  stuck on. Captured mechanically via hooks, distilled on demand. Honestly also a pilot for a
+  bigger idea — a development-specific LLM memory, a sort of Karpathy-style LLM wiki for how
+  *you* work.
+- **Phase 3 — Ergonomics.** Nicer keybinds for jumping in/out of the Claude pane and copying
+  responses back out.
+- **Phase 4 — Smarter explain.** Use LSP / tree-sitter to resolve the symbol under the cursor
+  to its package/source and feed real docs and examples into the explain prompt, instead of
+  just the raw text.
+- **Phase 5 — Inline send.** Type a line in insert mode and fire it off to Claude without
+  leaving the current window. Probably the easiest one; might jump the queue.
 
-All three commands accept a visual range (`'<,'>`), which is populated
-automatically when invoked from visual mode:
-
-| Command | Behavior |
-| --- | --- |
-| `:ClaudeAssistantReview` | Sends `prompts.review` + the selection (as a reference or wrapped code — see below), submitted immediately. |
-| `:ClaudeAssistantExplain` | Sends `prompts.explain` + the selection, submitted immediately. |
-| `:ClaudeAssistantPaste` | Inserts the selection into the Claude prompt **without** submitting (no instruction prefix), and focuses the pane so you can type your own question around it. |
-
-Example: `:'<,'>ClaudeAssistantReview`.
-
-### What gets sent (line reference vs. code)
-
-What lands in the Claude prompt depends on the **kind** of selection, so Claude
-gets the most useful context:
-
-- **Whole-line selections** (a linewise visual selection, or an operator + a
-  linewise motion like `ip`) send just a file reference, e.g.
-  `@lua/config/keymaps.lua#L54-58`. Claude Code expands the `@`-mention and reads
-  those exact lines from the file, so it can also look at the surrounding code.
-- **Partial (charwise) selections** send the selected text itself, wrapped as
-  code — inline `` `code` `` for one line, a fenced block for several — followed
-  by the reference in parentheses, e.g. `` `vim.keymap.set` ( @keymaps.lua#L54 ) ``,
-  so Claude sees the exact fragment *and* where it came from.
-- In an **unnamed buffer** (no file to reference) the selection is always sent as
-  wrapped text, with no reference.
-
-This applies to all three actions; `:ClaudeAssistantPaste` just skips the
-instruction prefix and leaves the result unsubmitted so you can type around it.
-The reference formats are configurable via `reference.linewise` /
-`reference.charwise` (see [Configuration](#configuration)).
-
-### `<Plug>` mappings
-
-Every action registers a `<Plug>` mapping, always available regardless of
-`keymaps.enable`:
-
-- `<Plug>(ClaudeAssistantReview)`
-- `<Plug>(ClaudeAssistantExplain)`
-- `<Plug>(ClaudeAssistantPaste)`
-
-Map these to keys of your choice, in both normal and visual mode:
-
-```lua
-vim.keymap.set({ "n", "x" }, "<leader>cr", "<Plug>(ClaudeAssistantReview)")
-vim.keymap.set({ "n", "x" }, "<leader>ce", "<Plug>(ClaudeAssistantExplain)")
-vim.keymap.set({ "n", "x" }, "<leader>cp", "<Plug>(ClaudeAssistantPaste)")
-```
-
-If you'd rather have the plugin install these for you with the defaults
-shown in [Configuration](#configuration), set `keymaps.enable = true`.
-
-### Visual selection vs. operator + motion
-
-Each mapping works two ways:
-
-- **Visual selection**: select text, then hit the mapping (e.g. select a
-  block, then `<leader>cr`) to act on the selection.
-- **Normal-mode operator**: hit the mapping first, then supply a motion or
-  text object (e.g. `<leader>cr` then `ip` reviews the inner paragraph under
-  the cursor; `<leader>ce` then `2j` explains the current + next two lines).
-
-Both forms end up sending the same extracted range through the same prompt
-composition, so pick whichever is more convenient at the time.
-
-## Known limitations (v1)
-
-`:ClaudeAssistantExplain` (and the other actions) are purely **text-based**:
-they send the raw selected/motion-covered text plus your configured prompt
-prefix. There is no LSP or tree-sitter based symbol resolution — the plugin
-does not expand a selection to its enclosing function, resolve references,
-or pull in type information. Richer symbol-aware context is a planned later
-phase, not part of this version.
+No wiki or `:help` pages yet — maybe later, if the thing proves itself.
