@@ -29,6 +29,32 @@ local function wrap_code(text)
   return "`" .. text .. "`"
 end
 
+-- show the pane and send; on_result(ok, existed) fires after the attempt.
+local function fire(payload, send_opts, on_result)
+  local terminal = require("claudecode.terminal")
+  local existed = terminal.get_active_terminal_bufnr() ~= nil
+  terminal.ensure_visible()
+  local function go()
+    local ok = terminal.send_to_terminal(payload, send_opts)
+    if not ok then
+      vim.notify(
+        "[claude-assistant] send failed - needs the native/snacks provider and a Claude pane",
+        vim.log.levels.ERROR
+      )
+    end
+    if on_result then
+      on_result(ok, existed)
+    end
+  end
+  if existed then
+    go()
+  else
+    vim.defer_fn(go, 250)
+  end
+end
+
+M._fire = fire
+
 -- opts: { pos1, pos2, regtype, exclusive, linewise }
 local function do_send(action, opts)
   local cfg = require("claude-assistant.config").options
@@ -70,28 +96,7 @@ local function do_send(action, opts)
     payload = payload .. "\n"
   end
 
-  local terminal = require("claudecode.terminal")
-  local existed = terminal.get_active_terminal_bufnr() ~= nil
-  terminal.ensure_visible() -- create/show the Claude pane without stealing focus
-  local function fire()
-    local ok = terminal.send_to_terminal(payload, {
-      submit = action ~= "paste", -- paste inserts without sending
-      focus = action == "paste", -- land in the prompt to keep typing
-    })
-    if not ok then
-      vim.notify(
-        "[claude-assistant] send failed - needs the native/snacks provider and a Claude pane",
-        vim.log.levels.ERROR
-      )
-    end
-  end
-  -- Cold start: ensure_visible() just spawned Claude; its TUI prompt is not ready,
-  -- so writing immediately can drop the first message. Defer only in that case.
-  if existed then
-    fire()
-  else
-    vim.defer_fn(fire, 250)
-  end
+  fire(payload, { submit = action ~= "paste", focus = action == "paste" })
 end
 
 -- Visual entrypoint. The x-mode mapping uses the :<C-u>...<CR> form so visual mode is
