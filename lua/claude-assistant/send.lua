@@ -8,14 +8,22 @@ local function region_text(pos1, pos2, regtype, exclusive)
   return table.concat(lines, "\n")
 end
 
--- Workspace-relative path + line spec for the current buffer, or nil for an unnamed
--- buffer (no file to reference). `lines` is "54" for one line or "54-58" for a range.
-local function file_and_lines(startln, endln)
+-- Workspace-relative path of the current buffer, or nil for an unnamed buffer.
+local function current_file_path()
   local name = vim.api.nvim_buf_get_name(0)
   if name == "" then
     return nil
   end
-  local path = vim.fn.fnamemodify(name, ":.") -- relative to cwd when the file is under it
+  return vim.fn.fnamemodify(name, ":.") -- relative to cwd when the file is under it
+end
+
+-- Workspace-relative path + line spec for the current buffer, or nil for an unnamed
+-- buffer (no file to reference). `lines` is "54" for one line or "54-58" for a range.
+local function file_and_lines(startln, endln)
+  local path = current_file_path()
+  if not path then
+    return nil
+  end
   local lines = (startln == endln) and tostring(startln) or (startln .. "-" .. endln)
   return path, lines
 end
@@ -126,6 +134,20 @@ function M.make_opfunc(action)
       linewise = kind == "line",
     })
   end
+end
+
+-- Whole-file entrypoint: no selection involved, just the explain prompt plus a bare
+-- whole-file @-mention. Claude Code expands it and reads the entire file itself.
+function M.explain_file()
+  local cfg = require("claude-assistant.config").options
+  local path = current_file_path()
+  if not path then
+    vim.notify("[claude-assistant] no file to explain (unnamed buffer)", vim.log.levels.WARN)
+    return
+  end
+  local prompt = cfg.prompts.explain_file or cfg.prompts.explain
+  local payload = prompt .. "\n@" .. path .. "\n" -- multi-line -> bracketed paste
+  fire(payload, { submit = true, focus = false })
 end
 
 return M

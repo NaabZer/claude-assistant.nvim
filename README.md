@@ -59,6 +59,7 @@ Three actions. Each one works two ways: from a **visual selection**, or as a nor
 | `:ClaudeAssistantReview` | Sends the selection as a "review this for bugs and logic flaws" prompt, submitted. |
 | `:ClaudeAssistantExplain` | Sends it as an "explain this and give usage examples" prompt, submitted. |
 | `:ClaudeAssistantPaste` | Drops the selection into the prompt **without** submitting, and focuses the pane so you can ask your own thing. |
+| `:ClaudeAssistantExplainFile` | Sends an "explain this and give usage examples" prompt plus a whole-file `@`-mention of the current buffer, submitted. Normal mode only — no selection involved. |
 
 Default keybinds are off. Either map the `<Plug>` mappings yourself (in normal and visual
 mode)...
@@ -67,6 +68,7 @@ mode)...
 vim.keymap.set({ "n", "x" }, "<leader>cr", "<Plug>(ClaudeAssistantReview)")
 vim.keymap.set({ "n", "x" }, "<leader>ce", "<Plug>(ClaudeAssistantExplain)")
 vim.keymap.set({ "n", "x" }, "<leader>cp", "<Plug>(ClaudeAssistantPaste)")
+vim.keymap.set("n", "<leader>cE", "<Plug>(ClaudeAssistantExplainFile)")
 ```
 
 ...or set `keymaps.enable = true` to get those defaults installed for you.
@@ -93,12 +95,14 @@ require("claude-assistant").setup({
   prompts = {
     review = "Review this for bugs and logic flaws:",
     explain = "Explain this and give usage examples:",
+    explain_file = nil,       -- nil => falls back to prompts.explain
   },
   keymaps = {
-    enable = false,            -- install the default <leader>c{r,e,p} maps
+    enable = false,            -- install the default <leader>c{r,e,p,E} maps
     review = "<leader>cr",
     explain = "<leader>ce",
     paste = "<leader>cp",
+    explain_file = "<leader>cE",
   },
   reference = {
     linewise = "@%s#L%s",      -- whole-line selection: sent bare (path, lines)
@@ -113,6 +117,11 @@ require("claude-assistant").setup({
 Change `prompts.review` / `prompts.explain` to reword the instruction prefixes. The spaces
 inside `reference.charwise`'s parens matter — a tight `(@file#L1)` isn't expanded by Claude
 Code, but `( @file#L1 )` is.
+
+`prompts.explain_file` lets you use a different wording for `:ClaudeAssistantExplainFile`
+than for the selection-based `explain` — leave it `nil` to just reuse `prompts.explain`.
+`keymaps.explain_file` is its opt-in default keybind, mapped in normal mode only (there's no
+selection to act on, so no visual-mode mapping).
 
 ## Assistant role
 

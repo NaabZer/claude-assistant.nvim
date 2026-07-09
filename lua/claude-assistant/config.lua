@@ -4,12 +4,14 @@ M.defaults = {
   prompts = {
     review = "Review this for bugs and logic flaws:",
     explain = "Explain this and give usage examples:",
+    explain_file = nil, -- nil => falls back to prompts.explain
   },
   keymaps = {
     enable = false, -- do not map by default
     review = "<leader>cr",
     explain = "<leader>ce",
     paste = "<leader>cp", -- paste selection into prompt, no submit
+    explain_file = "<leader>cE", -- explain the whole current file
   },
   reference = {
     linewise = "@%s#L%s", -- whole-line selection: sent bare, alone (path, lines)

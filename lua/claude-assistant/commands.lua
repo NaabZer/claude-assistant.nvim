@@ -34,6 +34,20 @@ function M.register()
       vim.keymap.set({ "n", "x" }, cfg.keymaps[action], plug, { remap = true, silent = true })
     end
   end
+
+  -- cE is a single-shot normal-mode command: no visual mode, no operator/motion, no
+  -- range, so it doesn't belong in the {review,explain,paste} loop above.
+  local explain_file_plug = "<Plug>(ClaudeAssistantExplainFile)"
+
+  vim.keymap.set("n", explain_file_plug,
+    function() send.explain_file() end, { silent = true })
+
+  vim.api.nvim_create_user_command("ClaudeAssistantExplainFile",
+    function() send.explain_file() end, {})
+
+  if cfg.keymaps.enable then
+    vim.keymap.set("n", cfg.keymaps.explain_file, explain_file_plug, { remap = true, silent = true })
+  end
 end
 
 return M
