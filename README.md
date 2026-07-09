@@ -73,6 +73,33 @@ vim.keymap.set("n", "<leader>cE", "<Plug>(ClaudeAssistantExplainFile)")
 
 ...or set `keymaps.enable = true` to get those defaults installed for you.
 
+### Insert-mode quick-send
+
+Hit `<C-s>` while typing in insert mode and the current line is sent to Claude as-is
+(no prompt prefix, no wrapping, no file reference) and submitted; the line is then
+cleared and you stay in insert mode, ready to type the next one. Handy as a scratch
+prompt line inside whatever file you're already in.
+
+The clear only happens once the send is *confirmed* to have reached an already-open
+Claude pane. If the pane was still starting up (cold start) or the send failed, the
+line is left untouched and a `[claude-assistant] Sent - Claude pane was starting,
+text kept.` notification is shown instead — your text is never silently lost. An
+empty line does nothing.
+
+This mapping is opt-in, same as the others: it's only installed (in insert mode) when
+`keymaps.enable = true`, using the `keymaps.quicksend_insert` key (default `<C-s>`).
+
+```lua
+vim.keymap.set("i", "<C-s>", function() require("claude-assistant.send").send_line_insert() end)
+```
+
+> [!WARNING]
+> Many terminals map `<C-s>` to XOFF (software flow control), which freezes the
+> terminal on first use instead of triggering the mapping — `<C-q>` (XON) unfreezes
+> it. Fix it one of three ways: run `stty -ixon` (e.g. in your shell rc) to disable
+> flow control, use Neovim's built-in `<C-g>s` insert-mode literal-send fallback,
+> or remap `keymaps.quicksend_insert` to a different key.
+
 ### What actually gets sent
 
 It depends on the *kind* of selection, so Claude gets the most useful context:
@@ -103,6 +130,7 @@ require("claude-assistant").setup({
     explain = "<leader>ce",
     paste = "<leader>cp",
     explain_file = "<leader>cE",
+    quicksend_insert = "<C-s>", -- insert-mode: send current line, clear it, stay in insert
   },
   reference = {
     linewise = "@%s#L%s",      -- whole-line selection: sent bare (path, lines)
@@ -162,7 +190,7 @@ headed.
 - **Phase 4 — Smarter explain.** Use LSP / tree-sitter to resolve the symbol under the cursor
   to its package/source and feed real docs and examples into the explain prompt, instead of
   just the raw text.
-- **Phase 5 — Inline send.** Type a line in insert mode and fire it off to Claude without
-  leaving the current window. Probably the easiest one; might jump the queue.
+- **Phase 5 — Inline send. Done, out of order** — it turned out to be the easiest one. See
+  [Insert-mode quick-send](#insert-mode-quick-send) above.
 
 No wiki or `:help` pages yet — maybe later, if the thing proves itself.

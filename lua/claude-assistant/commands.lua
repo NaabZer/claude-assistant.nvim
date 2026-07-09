@@ -8,6 +8,14 @@ local function operator(action)
   return "g@"
 end
 
+-- Install an opt-in default keymap only when the user enabled defaults. remap=true is
+-- REQUIRED for <Plug> RHS values to expand (vim.keymap.set is noremap by default).
+local function maybe_map(cfg, mode, lhs, rhs)
+  if cfg.keymaps.enable then
+    vim.keymap.set(mode, lhs, rhs, { remap = true, silent = true })
+  end
+end
+
 function M.register()
   local cfg = require("claude-assistant.config").options
 
@@ -28,11 +36,8 @@ function M.register()
     vim.api.nvim_create_user_command("ClaudeAssistant" .. suffix,
       function() send.send_visual(action) end, { range = true })
 
-    -- Opt-in default keymap. remap = true is REQUIRED so the <Plug> RHS expands
-    -- (vim.keymap.set is noremap by default, under which <Plug> does not fire).
-    if cfg.keymaps.enable then
-      vim.keymap.set({ "n", "x" }, cfg.keymaps[action], plug, { remap = true, silent = true })
-    end
+    -- Opt-in default keymap.
+    maybe_map(cfg, { "n", "x" }, cfg.keymaps[action], plug)
   end
 
   -- cE is a single-shot normal-mode command: no visual mode, no operator/motion, no
@@ -45,9 +50,12 @@ function M.register()
   vim.api.nvim_create_user_command("ClaudeAssistantExplainFile",
     function() send.explain_file() end, {})
 
-  if cfg.keymaps.enable then
-    vim.keymap.set("n", cfg.keymaps.explain_file, explain_file_plug, { remap = true, silent = true })
-  end
+  maybe_map(cfg, "n", cfg.keymaps.explain_file, explain_file_plug)
+
+  -- Insert-mode quick-send: keystroke-driven, no selection/motion/range involved, so
+  -- no <Plug> or user command -- the opt-in keymap below is the only entrypoint.
+  maybe_map(cfg, "i", cfg.keymaps.quicksend_insert,
+    function() require("claude-assistant.send").send_line_insert() end)
 end
 
 return M

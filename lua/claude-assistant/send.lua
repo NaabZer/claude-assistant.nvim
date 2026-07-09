@@ -150,4 +150,32 @@ function M.explain_file()
   fire(payload, { submit = true, focus = false })
 end
 
+-- Insert-mode quick-send: fire the current line as-is, then clear it (staying in
+-- insert mode) so the line becomes a scratch prompt buffer. Only clears once the
+-- send is CONFIRMED to have gone to an already-open pane -- on cold start (or a
+-- failed send) the text is kept, since it's the only copy the user has typed.
+function M.send_line_insert()
+  local buf = vim.api.nvim_get_current_buf()
+  local row = vim.api.nvim_win_get_cursor(0)[1] - 1 -- 0-indexed
+  local text = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1] or ""
+  if text == "" then
+    return
+  end
+  -- Force-append a newline so a single-line payload containing "@" is bracketed-pasted
+  -- rather than typed char-by-char into Claude's interactive mention menu (same reason
+  -- do_send guarantees a trailing newline).
+  fire(text .. "\n", { submit = true, focus = false }, function(ok, existed)
+    if ok and existed and vim.bo[buf].modifiable then
+      -- The cursor may have moved, or the user may have kept typing during the
+      -- cold-start defer; only clear if the line still matches what was sent.
+      local cur = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1]
+      if cur == text then
+        vim.api.nvim_buf_set_lines(buf, row, row + 1, false, { "" }) -- register-safe, undoable
+      end
+    else
+      vim.notify("[claude-assistant] Sent - Claude pane was starting, text kept.", vim.log.levels.INFO)
+    end
+  end)
+end
+
 return M

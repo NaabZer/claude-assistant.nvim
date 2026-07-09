@@ -4,25 +4,15 @@
 -- Keep this minimal: it currently only covers the `fire` helper's on_result
 -- contract. Later commits add more cases as new senders land.
 
--- Use io.stdout directly (with an explicit flush) rather than print(): under
--- `nvim -l`, the process can exit before print()'s output is flushed, dropping
--- the trailing newline (and, in the worst case, the line itself).
-local function fail(msg)
-  io.stdout:write("FAIL: " .. msg .. "\n")
-  io.stdout:flush()
-  os.exit(1, true)
-end
-
-local function pass(msg)
-  io.stdout:write("PASS: " .. msg .. "\n")
-  io.stdout:flush()
-end
-
 -- Resolve the plugin root from this script's own path so it works regardless
--- of the caller's cwd, then make `require("claude-assistant.send")` resolvable.
+-- of the caller's cwd, then make `require("claude-assistant.send")` and
+-- `require("harness")` resolvable.
 local script_dir = debug.getinfo(1, "S").source:match("@(.*/)") or "./"
 local root = script_dir .. "../"
-package.path = root .. "lua/?.lua;" .. root .. "lua/?/init.lua;" .. package.path
+package.path = script_dir .. "?.lua;" .. root .. "lua/?.lua;" .. root .. "lua/?/init.lua;" .. package.path
+
+local harness = require("harness")
+local fail, pass = harness.fail, harness.pass
 
 -- Stub claudecode.terminal BEFORE requiring send.lua so the harness controls
 -- get_active_terminal_bufnr/ensure_visible/send_to_terminal instead of needing
