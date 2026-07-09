@@ -5,6 +5,7 @@ M.defaults = {
     review = "Review this for bugs and logic flaws:",
     explain = "Explain this and give usage examples:",
     explain_file = nil, -- nil => falls back to prompts.explain
+    review_diff = "Review these changes for bugs and logic flaws:",
   },
   keymaps = {
     enable = false, -- do not map by default
@@ -14,6 +15,7 @@ M.defaults = {
     explain_file = "<leader>cE", -- explain the whole current file
     quicksend_insert = "<C-s>", -- insert-mode: send current line, clear it, stay in insert
     quicksend = "<leader>cs", -- visual/motion: send raw selection, delete it once sent
+    review_diff = "<leader>cR", -- review the uncommitted diff
   },
   reference = {
     linewise = "@%s#L%s", -- whole-line selection: sent bare, alone (path, lines)

@@ -16,6 +16,16 @@ local function maybe_map(cfg, mode, lhs, rhs)
   end
 end
 
+-- Register a single-shot normal-mode command (no visual/operator/range): a <Plug>
+-- mapping, a user command, and an opt-in default keymap. `suffix` names both the
+-- <Plug> and the :ClaudeAssistant<suffix> command; `keymap_key` indexes cfg.keymaps.
+local function register_single_shot(cfg, suffix, keymap_key, fn)
+  local plug = "<Plug>(ClaudeAssistant" .. suffix .. ")"
+  vim.keymap.set("n", plug, fn, { silent = true })
+  vim.api.nvim_create_user_command("ClaudeAssistant" .. suffix, fn, {})
+  maybe_map(cfg, "n", cfg.keymaps[keymap_key], plug)
+end
+
 function M.register()
   local cfg = require("claude-assistant.config").options
 
@@ -40,17 +50,10 @@ function M.register()
     maybe_map(cfg, { "n", "x" }, cfg.keymaps[action], plug)
   end
 
-  -- cE is a single-shot normal-mode command: no visual mode, no operator/motion, no
-  -- range, so it doesn't belong in the {review,explain,paste} loop above.
-  local explain_file_plug = "<Plug>(ClaudeAssistantExplainFile)"
-
-  vim.keymap.set("n", explain_file_plug,
-    function() send.explain_file() end, { silent = true })
-
-  vim.api.nvim_create_user_command("ClaudeAssistantExplainFile",
-    function() send.explain_file() end, {})
-
-  maybe_map(cfg, "n", cfg.keymaps.explain_file, explain_file_plug)
+  -- cE / cR: single-shot normal-mode commands (no selection/motion/range) -- cE explains
+  -- the whole file, cR sends the working-tree diff.
+  register_single_shot(cfg, "ExplainFile", "explain_file", function() send.explain_file() end)
+  register_single_shot(cfg, "ReviewDiff", "review_diff", function() send.review_diff() end)
 
   -- Insert-mode quick-send: keystroke-driven, no selection/motion/range involved, so
   -- no <Plug> or user command -- the opt-in keymap below is the only entrypoint.

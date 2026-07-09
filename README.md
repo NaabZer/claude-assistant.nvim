@@ -61,6 +61,7 @@ Three actions. Each one works two ways: from a **visual selection**, or as a nor
 | `:ClaudeAssistantPaste` | Drops the selection into the prompt **without** submitting, and focuses the pane so you can ask your own thing. |
 | `:ClaudeAssistantExplainFile` | Sends an "explain this and give usage examples" prompt plus a whole-file `@`-mention of the current buffer, submitted. Normal mode only — no selection involved. |
 | `:ClaudeAssistantQuickSend` | Sends the raw selection as-is (no prompt, wrap, or reference), submitted, then deletes it from the buffer once the send is confirmed. See [Visual/motion quick-send](#visualmotion-quick-send). |
+| `:ClaudeAssistantReviewDiff` | Sends the uncommitted diff as raw text with a "review these changes" prompt, submitted. Normal mode only — no selection involved. See [Review your uncommitted changes](#review-your-uncommitted-changes). |
 
 Default keybinds are off. Either map the `<Plug>` mappings yourself (in normal and visual
 mode)...
@@ -70,6 +71,7 @@ vim.keymap.set({ "n", "x" }, "<leader>cr", "<Plug>(ClaudeAssistantReview)")
 vim.keymap.set({ "n", "x" }, "<leader>ce", "<Plug>(ClaudeAssistantExplain)")
 vim.keymap.set({ "n", "x" }, "<leader>cp", "<Plug>(ClaudeAssistantPaste)")
 vim.keymap.set("n", "<leader>cE", "<Plug>(ClaudeAssistantExplainFile)")
+vim.keymap.set("n", "<leader>cR", "<Plug>(ClaudeAssistantReviewDiff)")
 ```
 
 ...or set `keymaps.enable = true` to get those defaults installed for you.
@@ -135,6 +137,38 @@ vim.keymap.set({ "n", "x" }, "<leader>cs", "<Plug>(ClaudeAssistantQuickSend)")
 
 or call `:ClaudeAssistantQuickSend` directly (range-capable, same as the other commands).
 
+### Review your uncommitted changes
+
+`<leader>cR` sends your working-tree diff to Claude as raw text, prefixed with a "review
+these changes for bugs and logic flaws" prompt, and submits it. No selection needed — it's
+a single-shot normal-mode command, same shape as `:ClaudeAssistantExplainFile`.
+
+It prefers [`rtk`](https://github.com/NaabZer/rtk) (`rtk git diff`) when it's on your
+`$PATH`, falling back to plain `git diff HEAD` otherwise. Either way the diff is sent
+verbatim, as text — not as an `@`-mention — so Claude sees exactly what you see, with no
+expansion step in between.
+
+> [!NOTE]
+> `git diff HEAD` only shows changes to files git already knows about — brand new,
+> never-`git add`ed files aren't included. This is a plain limitation of `git diff`, not
+> something this plugin works around; `git add` a new file (even unstaged changes on top
+> are fine) if you want it in the review.
+
+It degrades gracefully: if there's nothing to review (clean working tree), you get a
+`[claude-assistant] no changes to review` notice and nothing is sent. If the command
+itself fails (e.g. you're not inside a git repo), you get a
+`[claude-assistant] diff failed: ...` warning with the underlying error instead — an empty
+prompt is never sent to Claude.
+
+Also opt-in via `keymaps.enable = true`, using `keymaps.review_diff` (default
+`<leader>cR`):
+
+```lua
+vim.keymap.set("n", "<leader>cR", "<Plug>(ClaudeAssistantReviewDiff)")
+```
+
+or call `:ClaudeAssistantReviewDiff` directly.
+
 ### What actually gets sent
 
 It depends on the *kind* of selection, so Claude gets the most useful context:
@@ -158,15 +192,17 @@ require("claude-assistant").setup({
     review = "Review this for bugs and logic flaws:",
     explain = "Explain this and give usage examples:",
     explain_file = nil,       -- nil => falls back to prompts.explain
+    review_diff = "Review these changes for bugs and logic flaws:",
   },
   keymaps = {
-    enable = false,            -- install the default <leader>c{r,e,p,E} maps
+    enable = false,            -- install the default <leader>c{r,e,p,E,R} maps
     review = "<leader>cr",
     explain = "<leader>ce",
     paste = "<leader>cp",
     explain_file = "<leader>cE",
     quicksend_insert = "<C-s>", -- insert-mode: send current line, clear it, stay in insert
     quicksend = "<leader>cs", -- visual/motion: send raw selection, delete it once sent
+    review_diff = "<leader>cR", -- review the uncommitted diff
   },
   reference = {
     linewise = "@%s#L%s",      -- whole-line selection: sent bare (path, lines)
@@ -186,6 +222,10 @@ Code, but `( @file#L1 )` is.
 than for the selection-based `explain` — leave it `nil` to just reuse `prompts.explain`.
 `keymaps.explain_file` is its opt-in default keybind, mapped in normal mode only (there's no
 selection to act on, so no visual-mode mapping).
+
+`prompts.review_diff` is the prefix used by `:ClaudeAssistantReviewDiff`. `keymaps.review_diff`
+is its opt-in default keybind (`<leader>cR`), also normal mode only — see
+[Review your uncommitted changes](#review-your-uncommitted-changes).
 
 ## Assistant role
 

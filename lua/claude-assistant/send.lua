@@ -185,6 +185,30 @@ function M.explain_file()
   fire(payload, { submit = true, focus = false })
 end
 
+-- Uncommitted-diff review: send the working tree diff as raw text (no @-reference, no
+-- code wrap) with a configurable review prompt, submitted. Prefers `rtk git diff` when
+-- rtk is installed (it may add context on top of the raw diff), else falls back to
+-- `git diff HEAD`. Degrades gracefully: no repo / command error vs. a genuinely empty
+-- diff are distinguished so the user isn't left guessing, and an empty prompt is never
+-- sent.
+function M.review_diff()
+  local cfg = require("claude-assistant.config").options
+  local cmd = (vim.fn.executable("rtk") == 1) and { "rtk", "git", "diff" } or { "git", "diff", "HEAD" }
+  local res = vim.system(cmd, { text = true }):wait()
+  local diff = (res.stdout or ""):gsub("%s+$", "")
+  if diff == "" then
+    -- Empty stdout => no changes, regardless of exit code (rtk/git differ on a clean diff).
+    if res.code ~= 0 then
+      vim.notify("[claude-assistant] diff failed: " .. (res.stderr or ""), vim.log.levels.WARN)
+    else
+      vim.notify("[claude-assistant] no changes to review", vim.log.levels.INFO)
+    end
+    return
+  end
+  local payload = cfg.prompts.review_diff .. "\n" .. diff .. "\n" -- multi-line -> bracketed paste
+  fire(payload, { submit = true, focus = false })
+end
+
 -- Insert-mode quick-send: fire the current line as-is, then clear it (staying in
 -- insert mode) so the line becomes a scratch prompt buffer. Only clears once the
 -- send is CONFIRMED to have gone to an already-open pane -- on cold start (or a
