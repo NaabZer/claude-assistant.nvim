@@ -13,6 +13,7 @@ M.defaults = {
     paste = "<leader>cp", -- paste selection into prompt, no submit
     explain_file = "<leader>cE", -- explain the whole current file
     quicksend_insert = "<C-s>", -- insert-mode: send current line, clear it, stay in insert
+    quicksend = "<leader>cs", -- visual/motion: send raw selection, delete it once sent
   },
   reference = {
     linewise = "@%s#L%s", -- whole-line selection: sent bare, alone (path, lines)

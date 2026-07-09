@@ -56,6 +56,25 @@ function M.register()
   -- no <Plug> or user command -- the opt-in keymap below is the only entrypoint.
   maybe_map(cfg, "i", cfg.keymaps.quicksend_insert,
     function() require("claude-assistant.send").send_line_insert() end)
+
+  -- Visual/motion quick-send: raw send + delete-on-confirmed-send. Semantically distinct
+  -- from the {review,explain,paste} family (no prompt/wrap/reference, and it mutates the
+  -- buffer), so it's registered on its own here rather than in that loop, with its own
+  -- opfunc global so it never clashes with operator()'s.
+  local quick_plug = "<Plug>(ClaudeAssistantQuickSend)"
+
+  vim.keymap.set("x", quick_plug,
+    ":<C-u>lua require('claude-assistant.send').send_quick_visual()<CR>", { silent = true })
+  vim.keymap.set("n", quick_plug, function()
+    _G.__claude_assistant_quick_opfunc = send.make_quick_opfunc()
+    vim.o.operatorfunc = "v:lua.__claude_assistant_quick_opfunc"
+    return "g@"
+  end, { expr = true, silent = true })
+
+  vim.api.nvim_create_user_command("ClaudeAssistantQuickSend",
+    function() send.send_quick_visual() end, { range = true })
+
+  maybe_map(cfg, { "n", "x" }, cfg.keymaps.quicksend, quick_plug)
 end
 
 return M

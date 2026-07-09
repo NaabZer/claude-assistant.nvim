@@ -60,6 +60,7 @@ Three actions. Each one works two ways: from a **visual selection**, or as a nor
 | `:ClaudeAssistantExplain` | Sends it as an "explain this and give usage examples" prompt, submitted. |
 | `:ClaudeAssistantPaste` | Drops the selection into the prompt **without** submitting, and focuses the pane so you can ask your own thing. |
 | `:ClaudeAssistantExplainFile` | Sends an "explain this and give usage examples" prompt plus a whole-file `@`-mention of the current buffer, submitted. Normal mode only — no selection involved. |
+| `:ClaudeAssistantQuickSend` | Sends the raw selection as-is (no prompt, wrap, or reference), submitted, then deletes it from the buffer once the send is confirmed. See [Visual/motion quick-send](#visualmotion-quick-send). |
 
 Default keybinds are off. Either map the `<Plug>` mappings yourself (in normal and visual
 mode)...
@@ -100,6 +101,35 @@ vim.keymap.set("i", "<C-s>", function() require("claude-assistant.send").send_li
 > flow control, use Neovim's built-in `<C-g>s` insert-mode literal-send fallback,
 > or remap `keymaps.quicksend_insert` to a different key.
 
+### Visual/motion quick-send
+
+`<leader>cs` is the visual-mode sibling of the insert-mode quick-send above: works from a
+**visual selection** or as a normal-mode **operator + motion / text-object**, same as
+`review`/`explain`/`paste`. It sends the raw selected text as-is — no prompt prefix, no code
+wrap, no `@`-reference — submitted, and then **deletes the selected region** from the buffer.
+Handy for turning a chunk of scratch code or a stray comment straight into a prompt without
+leaving it behind.
+
+The delete only happens once the send is *confirmed* to have reached an already-open Claude
+pane, exactly like the insert-mode version: cold start or a failed send keeps the text and
+shows the same `text kept.` notification. It's done with buffer-API edits
+(`nvim_buf_set_lines`/`nvim_buf_set_text`), never a `d`-motion, so your unnamed register is
+untouched and the delete is a normal undo step — `u` brings it right back.
+
+Two cases are send-only (sent, never deleted):
+
+- **Blockwise selections** (`<C-v>`) — deleting a block cleanly isn't worth the risk, so it's
+  sent and left alone, with a `blockwise: sent, not deleted` notice.
+- **Read-only / special buffers** — nothing to delete there anyway.
+
+Also opt-in via `keymaps.enable = true`, using `keymaps.quicksend` (default `<leader>cs`):
+
+```lua
+vim.keymap.set({ "n", "x" }, "<leader>cs", "<Plug>(ClaudeAssistantQuickSend)")
+```
+
+or call `:ClaudeAssistantQuickSend` directly (range-capable, same as the other commands).
+
 ### What actually gets sent
 
 It depends on the *kind* of selection, so Claude gets the most useful context:
@@ -131,6 +161,7 @@ require("claude-assistant").setup({
     paste = "<leader>cp",
     explain_file = "<leader>cE",
     quicksend_insert = "<C-s>", -- insert-mode: send current line, clear it, stay in insert
+    quicksend = "<leader>cs", -- visual/motion: send raw selection, delete it once sent
   },
   reference = {
     linewise = "@%s#L%s",      -- whole-line selection: sent bare (path, lines)
@@ -191,6 +222,7 @@ headed.
   to its package/source and feed real docs and examples into the explain prompt, instead of
   just the raw text.
 - **Phase 5 — Inline send. Done, out of order** — it turned out to be the easiest one. See
-  [Insert-mode quick-send](#insert-mode-quick-send) above.
+  [Insert-mode quick-send](#insert-mode-quick-send) and
+  [Visual/motion quick-send](#visualmotion-quick-send) above.
 
 No wiki or `:help` pages yet — maybe later, if the thing proves itself.

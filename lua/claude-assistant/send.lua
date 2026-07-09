@@ -63,6 +63,41 @@ end
 
 M._fire = fire
 
+-- Register-safe, undoable deletion of a region -- called ONLY from quick_send's on_result,
+-- after a CONFIRMED send (never on cold start / failed send / blockwise). Uses the buffer
+-- API exclusively (nvim_buf_set_lines / nvim_buf_set_text), never a `d`-motion, so the
+-- unnamed register is untouched.
+local function delete_region(buf, pos1, pos2, regtype, exclusive)
+  if regtype == "V" then
+    -- Linewise: drop the whole line range.
+    local startln = math.min(pos1[2], pos2[2])
+    local endln = math.max(pos1[2], pos2[2])
+    vim.api.nvim_buf_set_lines(buf, startln - 1, endln, false, {})
+    return
+  end
+
+  -- Charwise: getregionpos (Neovim >= 0.10) returns byte positions honoring
+  -- type/exclusive/multibyte, so we don't hand-roll the inclusive-BYTE -> exclusive-col
+  -- conversion. For a multi-line charwise region it returns one {start, end} segment PER
+  -- LINE; the delete rect spans the first segment's start to the last segment's end, and
+  -- nvim_buf_set_text joins the first line's prefix with the last line's suffix in one
+  -- call -- exactly like a charwise `d`. Empirically confirmed (against a multibyte line,
+  -- e.g. "h\xC3\xA9llo\xE2\x86\x92\xE4\xB8\x96\xE7\x95\x8C"): each returned column is the
+  -- LAST byte (1-based) of the boundary character, which numerically equals the 0-based
+  -- EXCLUSIVE end column nvim_buf_set_text expects (1-based inclusive index X == 0-based
+  -- exclusive index X), so it's used as-is with no extra +/-1.
+  local regions = vim.fn.getregionpos(pos1, pos2, { type = regtype, exclusive = exclusive })
+  if not regions or #regions == 0 then
+    return
+  end
+  local first, last = regions[1][1], regions[#regions][2]
+  local srow, scol = first[2] - 1, first[3] - 1
+  local erow, ecol = last[2] - 1, last[3]
+  vim.api.nvim_buf_set_text(buf, srow, scol, erow, ecol, {})
+end
+
+M._delete_region = delete_region
+
 -- opts: { pos1, pos2, regtype, exclusive, linewise }
 local function do_send(action, opts)
   local cfg = require("claude-assistant.config").options
@@ -176,6 +211,50 @@ function M.send_line_insert()
       vim.notify("[claude-assistant] Sent - Claude pane was starting, text kept.", vim.log.levels.INFO)
     end
   end)
+end
+
+-- Visual/motion quick-send: send the RAW region text as-is (no prompt prefix, no code
+-- wrap, no @-reference) and DELETE the region -- but ONLY once the send is CONFIRMED to
+-- have reached an already-open pane (same guard as send_line_insert). Cold start / failed
+-- send keeps the text; blockwise and read-only/special buffers are send-only (no delete).
+local function quick_send(pos1, pos2, regtype, exclusive)
+  local text = region_text(pos1, pos2, regtype, exclusive)
+  if not text or text == "" then
+    vim.notify("[claude-assistant] nothing selected", vim.log.levels.WARN)
+    return
+  end
+  local buf = vim.api.nvim_get_current_buf()
+  -- Keep the force-newline so a single-line raw payload with an embedded @ is
+  -- bracketed-pasted, not typed into Claude's mention menu (same rule as do_send).
+  local payload = text:find("\n", 1, true) and text or (text .. "\n")
+  fire(payload, { submit = true, focus = false }, function(ok, existed)
+    if not (ok and existed) then
+      vim.notify("[claude-assistant] Sent - Claude pane was starting, text kept.", vim.log.levels.INFO)
+      return
+    end
+    if not vim.bo[buf].modifiable then
+      return -- read-only/special buffer: send-only
+    end
+    if regtype == "\22" then
+      vim.notify("[claude-assistant] blockwise: sent, not deleted", vim.log.levels.INFO)
+      return
+    end
+    delete_region(buf, pos1, pos2, regtype, exclusive)
+  end)
+end
+
+-- Visual entrypoint (see M.send_visual for the :<C-u>...<CR> mark-commit rationale).
+function M.send_quick_visual()
+  local regtype = vim.fn.visualmode()
+  quick_send(vim.fn.getpos("'<"), vim.fn.getpos("'>"), regtype, nil)
+end
+
+-- Operator entrypoint: opfunc invoked by g@ with kind = 'line'|'char'|'block'.
+function M.make_quick_opfunc()
+  return function(kind)
+    local regtype = ({ line = "V", char = "v", block = "\22" })[kind] or "v"
+    quick_send(vim.fn.getpos("'["), vim.fn.getpos("']"), regtype, false)
+  end
 end
 
 return M
