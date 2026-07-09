@@ -146,4 +146,41 @@ do
   pass("empty line: no send")
 end
 
+-- Case 5: indented line, happy path (ok=true, existed=true) -> the SENT payload must be
+-- stripped of leading indentation, while the CLEARED line must keep that indentation
+-- (not "") with the cursor parked right after it, so the next line continues at the
+-- same indent level instead of snapping to column 0.
+do
+  stub.existed = true
+  stub.ok = true
+  calls.send_to_terminal = {}
+  local indent = "        " -- 8 spaces
+  local text = indent .. "print(x)"
+  local buf = make_scratch(text)
+  vim.api.nvim_win_set_cursor(0, { 1, #text })
+  -- send_line_insert is only ever invoked from an insert-mode mapping; enter insert
+  -- mode so nvim_win_set_cursor's one-past-end column semantics match real usage
+  -- (Normal mode clamps col to line_len - 1, since there's no character there).
+  vim.cmd("startinsert")
+
+  send.send_line_insert()
+
+  local sent = calls.send_to_terminal[#calls.send_to_terminal]
+  if not sent or sent.payload ~= "print(x)\n" then
+    fail('indented line: expected stripped payload "print(x)\\n", got "' .. tostring(sent and sent.payload) .. '"')
+  end
+
+  local cur = line_of(buf)
+  if cur ~= indent then
+    fail('indented line: expected line to be preserved indent "' .. indent .. '", got "' .. tostring(cur) .. '"')
+  end
+
+  local col = vim.api.nvim_win_get_cursor(0)[2]
+  if col ~= #indent then
+    fail("indented line: expected cursor col " .. #indent .. ", got " .. tostring(col))
+  end
+
+  pass("indented line (ok=true, existed=true): sent stripped, cleared to indent, cursor at indent end")
+end
+
 os.exit(0, true)

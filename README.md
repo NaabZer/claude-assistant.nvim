@@ -81,6 +81,11 @@ Hit `<C-s>` while typing in insert mode and the current line is sent to Claude a
 cleared and you stay in insert mode, ready to type the next one. Handy as a scratch
 prompt line inside whatever file you're already in.
 
+The line's leading indentation is stripped from what's sent — it's editor auto-indent,
+not part of the prompt — and preserved after sending: the line clears down to just that
+indentation (not flush left), so the cursor stays at the same indent level, ready for
+the next line.
+
 The clear only happens once the send is *confirmed* to have reached an already-open
 Claude pane. If the pane was still starting up (cold start) or the send failed, the
 line is left untouched and a `[claude-assistant] Sent - Claude pane was starting,
