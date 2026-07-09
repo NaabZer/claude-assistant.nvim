@@ -218,6 +218,10 @@ Change `prompts.review` / `prompts.explain` to reword the instruction prefixes. 
 inside `reference.charwise`'s parens matter — a tight `(@file#L1)` isn't expanded by Claude
 Code, but `( @file#L1 )` is.
 
+With `keymaps.enable = true`, you can still opt a single default map out by setting it to
+`false` — e.g. `keymaps = { enable = true, paste = false }` installs every default keybind
+except `<leader>cp`.
+
 `prompts.explain_file` lets you use a different wording for `:ClaudeAssistantExplainFile`
 than for the selection-based `explain` — leave it `nil` to just reuse `prompts.explain`.
 `keymaps.explain_file` is its opt-in default keybind, mapped in normal mode only (there's no

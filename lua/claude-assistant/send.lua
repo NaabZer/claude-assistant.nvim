@@ -190,23 +190,34 @@ end
 -- rtk is installed (it may add context on top of the raw diff), else falls back to
 -- `git diff HEAD`. Degrades gracefully: no repo / command error vs. a genuinely empty
 -- diff are distinguished so the user isn't left guessing, and an empty prompt is never
--- sent.
+-- sent. Runs asynchronously so a large/slow diff (or a hung rtk) never freezes the editor.
 function M.review_diff()
   local cfg = require("claude-assistant.config").options
-  local cmd = (vim.fn.executable("rtk") == 1) and { "rtk", "git", "diff" } or { "git", "diff", "HEAD" }
-  local res = vim.system(cmd, { text = true }):wait()
-  local diff = (res.stdout or ""):gsub("%s+$", "")
-  if diff == "" then
-    -- Empty stdout => no changes, regardless of exit code (rtk/git differ on a clean diff).
-    if res.code ~= 0 then
-      vim.notify("[claude-assistant] diff failed: " .. (res.stderr or ""), vim.log.levels.WARN)
-    else
-      vim.notify("[claude-assistant] no changes to review", vim.log.levels.INFO)
-    end
+  local has_rtk = vim.fn.executable("rtk") == 1
+  if not has_rtk and vim.fn.executable("git") == 0 then
+    vim.notify("[claude-assistant] neither rtk nor git is executable", vim.log.levels.WARN)
     return
   end
-  local payload = cfg.prompts.review_diff .. "\n" .. diff .. "\n" -- multi-line -> bracketed paste
-  fire(payload, { submit = true, focus = false })
+  local cmd = has_rtk and { "rtk", "git", "diff" } or { "git", "diff", "HEAD" }
+  -- Run the diff OFF the main loop so a large/slow diff (or a hung rtk) never freezes
+  -- the editor. vim.system's callback runs off the main loop, so hop back onto it with
+  -- vim.schedule before touching vim.notify / the buffer / fire().
+  vim.system(cmd, { text = true }, function(res)
+    vim.schedule(function()
+      local diff = (res.stdout or ""):gsub("%s+$", "")
+      if diff == "" then
+        -- Empty stdout => no changes, regardless of exit code (rtk/git differ on a clean diff).
+        if res.code ~= 0 then
+          vim.notify("[claude-assistant] diff failed: " .. (res.stderr or ""), vim.log.levels.WARN)
+        else
+          vim.notify("[claude-assistant] no changes to review", vim.log.levels.INFO)
+        end
+        return
+      end
+      local payload = cfg.prompts.review_diff .. "\n" .. diff .. "\n" -- multi-line -> bracketed paste
+      fire(payload, { submit = true, focus = false })
+    end)
+  end)
 end
 
 -- Insert-mode quick-send: fire the current line as-is, then clear it (staying in
@@ -228,20 +239,24 @@ function M.send_line_insert()
   -- rather than typed char-by-char into Claude's interactive mention menu (same reason
   -- do_send guarantees a trailing newline).
   fire(prompt .. "\n", { submit = true, focus = false }, function(ok, existed)
-    if ok and existed and vim.bo[buf].modifiable then
-      -- The cursor may have moved, or the user may have kept typing during the
-      -- cold-start defer; only clear if the line still matches what was sent.
-      local cur = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1]
-      if cur == text then
-        -- Keep the indentation (not a bare "") and park the cursor after it, so the
-        -- next line continues at the same level instead of snapping to column 0.
-        vim.api.nvim_buf_set_lines(buf, row, row + 1, false, { indent }) -- register-safe, undoable
-        if vim.api.nvim_get_current_win() == win then
-          vim.api.nvim_win_set_cursor(win, { row + 1, #indent })
-        end
-      end
-    else
+    if not (ok and existed) then
+      -- Cold start / failed send: keep the user's only copy of the text.
       vim.notify("[claude-assistant] Sent - Claude pane was starting, text kept.", vim.log.levels.INFO)
+      return
+    end
+    if not vim.bo[buf].modifiable then
+      return -- sent to an open pane; read-only/special buffer, nothing to clear
+    end
+    -- The cursor may have moved, or the user may have kept typing during the
+    -- cold-start defer; only clear if the line still matches what was sent.
+    local cur = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1]
+    if cur == text then
+      -- Keep the indentation (not a bare "") and park the cursor after it, so the
+      -- next line continues at the same level instead of snapping to column 0.
+      vim.api.nvim_buf_set_lines(buf, row, row + 1, false, { indent }) -- register-safe, undoable
+      if vim.api.nvim_get_current_win() == win then
+        vim.api.nvim_win_set_cursor(win, { row + 1, #indent })
+      end
     end
   end)
 end

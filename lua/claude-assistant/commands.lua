@@ -11,7 +11,9 @@ end
 -- Install an opt-in default keymap only when the user enabled defaults. remap=true is
 -- REQUIRED for <Plug> RHS values to expand (vim.keymap.set is noremap by default).
 local function maybe_map(cfg, mode, lhs, rhs)
-  if cfg.keymaps.enable then
+  -- lhs may be false/nil when the user opts out of a single default map
+  -- (keymaps = { enable = true, paste = false }); skip those instead of erroring.
+  if cfg.keymaps.enable and lhs then
     vim.keymap.set(mode, lhs, rhs, { remap = true, silent = true })
   end
 end

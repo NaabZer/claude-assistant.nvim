@@ -221,4 +221,34 @@ do
   pass("blockwise: send_quick_visual sends but does NOT delete the region")
 end
 
+-- Case 6: charwise happy-path -- drive the confirmed-send delete through the PUBLIC
+-- entrypoint (send_quick_visual), not the low-level helper. The stubbed
+-- claudecode.terminal above yields existed=true / ok=true, so this exercises the
+-- SYNCHRONOUS confirmed-send path end-to-end: send, then delete.
+do
+  local buf = make_scratch({ "abcdefgh" })
+  vim.fn.setpos("'<", { 0, 1, 3, 0 })
+  vim.fn.setpos("'>", { 0, 1, 6, 0 })
+
+  local orig_visualmode = vim.fn.visualmode
+  vim.fn.visualmode = function()
+    return "v" -- charwise
+  end
+
+  calls.send_to_terminal = {}
+  local orig_notify = vim.notify
+  vim.notify = function() end
+
+  send.send_quick_visual()
+
+  vim.fn.visualmode = orig_visualmode
+  vim.notify = orig_notify
+
+  assert_lines(buf, { "abgh" }, "charwise happy-path")
+  if #calls.send_to_terminal ~= 1 then
+    fail("charwise happy-path: send_to_terminal called " .. #calls.send_to_terminal .. " times, expected 1")
+  end
+  pass("charwise happy-path: send_quick_visual sends and deletes the region")
+end
+
 os.exit(0, true)
