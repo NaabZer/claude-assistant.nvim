@@ -37,18 +37,55 @@ local function wrap_code(text)
   return "`" .. text .. "`"
 end
 
--- show the pane and send; on_result(ok, existed) fires after the attempt.
+-- Delay between the bracketed paste and our own submit Enter. claudecode writes the
+-- paste and the CR in one chansend with no gap, so a warm TUI can swallow the CR into
+-- the paste block and the line never submits. We paste WITHOUT submit, then send Enter
+-- separately after this delay so the terminal has finished ingesting the paste first.
+-- Tunable; ~40ms is comfortable on a warm pane (cold start waits COLD_START_DELAY_MS below).
+local SUBMIT_DELAY_MS = 40
+
+-- Cold start: ensure_visible() may have just spawned Claude, whose TUI prompt isn't ready
+-- yet, so an immediate write can be silently dropped. When no pane existed, wait this long
+-- before sending. Longer than SUBMIT_DELAY_MS because a fresh process needs more slack.
+local COLD_START_DELAY_MS = 250
+
+-- Recover the terminal's job channel the way claudecode.terminal does internally (it does
+-- not expose this as public API), so we can write our own submit Enter to the PTY. Returns
+-- nil when there's no live channel.
+local function terminal_channel(bufnr)
+  local chan = vim.b[bufnr] and vim.b[bufnr].terminal_job_id
+  if not chan or chan == 0 then
+    chan = vim.bo[bufnr].channel
+  end
+  if not chan or chan == 0 then
+    return nil
+  end
+  return chan
+end
+
+-- show the pane and send; on_result(ok, existed) fires after the paste attempt. When
+-- submit is requested we send the Enter ourselves, a beat after the paste, so it can't
+-- race the bracketed-paste block (claudecode bundles paste+CR in one write).
 local function fire(payload, send_opts, on_result)
   local terminal = require("claudecode.terminal")
   local existed = terminal.get_active_terminal_bufnr() ~= nil
   terminal.ensure_visible()
   local function go()
-    local ok = terminal.send_to_terminal(payload, send_opts)
+    -- Paste WITHOUT submit; we own the Enter (below) so it can be separated in time.
+    local ok = terminal.send_to_terminal(payload, { submit = false, focus = send_opts.focus })
     if not ok then
       vim.notify(
         "[claude-assistant] send failed - needs the native/snacks provider and a Claude pane",
         vim.log.levels.ERROR
       )
+    elseif send_opts.submit then
+      local bufnr = terminal.get_active_terminal_bufnr()
+      local chan = bufnr and terminal_channel(bufnr)
+      if chan then
+        vim.defer_fn(function()
+          pcall(vim.fn.chansend, chan, "\r")
+        end, SUBMIT_DELAY_MS)
+      end
     end
     if on_result then
       on_result(ok, existed)
@@ -57,7 +94,7 @@ local function fire(payload, send_opts, on_result)
   if existed then
     go()
   else
-    vim.defer_fn(go, 250)
+    vim.defer_fn(go, COLD_START_DELAY_MS)
   end
 end
 

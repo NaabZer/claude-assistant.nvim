@@ -74,6 +74,86 @@ end
 pass("fire() invokes on_result(ok, existed) on the existed==true (immediate) path")
 
 -- ---------------------------------------------------------------------------------------
+-- fire(): submit decouple -- claudecode bundles the bracketed paste and its own CR in one
+-- chansend with no gap, so a warm TUI can swallow the CR into the paste block. fire() now
+-- NEVER lets claudecode submit (always passes submit=false through), and instead sends its
+-- own "\r" straight to the terminal channel after SUBMIT_DELAY_MS, so it can't race the
+-- paste. Give the stubbed active bufnr (1) a fake terminal channel and stub vim.fn.chansend
+-- to record calls instead of writing to a real PTY.
+-- ---------------------------------------------------------------------------------------
+
+do
+  local fake_chan = 4242
+  vim.b[1].terminal_job_id = fake_chan
+
+  local chansend_calls = {}
+  local orig_chansend = vim.fn.chansend
+  vim.fn.chansend = function(chan, data)
+    table.insert(chansend_calls, { chan = chan, data = data })
+    return 1
+  end
+
+  -- Case A: submit=true -- fire() must pass submit=false through to send_to_terminal (it
+  -- now owns the Enter itself) and must send its own "\r" to the terminal channel after
+  -- the paste, once SUBMIT_DELAY_MS has elapsed.
+  calls.send_to_terminal = {}
+  send._fire("hi\n", { submit = true, focus = false })
+
+  local fired = vim.wait(200, function()
+    return #chansend_calls > 0
+  end, 10)
+
+  if not fired then
+    fail("submit decouple: vim.fn.chansend was not called within 200ms")
+  end
+  if #chansend_calls ~= 1 then
+    fail("submit decouple: chansend called " .. #chansend_calls .. " times, expected 1")
+  end
+  if chansend_calls[1].chan ~= fake_chan then
+    fail("submit decouple: chansend chan = " .. tostring(chansend_calls[1].chan) .. ", expected " .. fake_chan)
+  end
+  if chansend_calls[1].data ~= "\r" then
+    fail('submit decouple: chansend data = "' .. tostring(chansend_calls[1].data) .. '", expected "\\r"')
+  end
+  if #calls.send_to_terminal ~= 1 then
+    fail("submit decouple: send_to_terminal called " .. #calls.send_to_terminal .. " times, expected 1")
+  end
+  if calls.send_to_terminal[1].send_opts.submit ~= false then
+    fail(
+      "submit decouple: send_to_terminal submit = "
+        .. tostring(calls.send_to_terminal[1].send_opts.submit)
+        .. ", expected false (fire() now owns the Enter)"
+    )
+  end
+  pass("fire() submit=true: send_to_terminal called with submit=false, own \\r sent to the terminal channel")
+
+  -- Case B: submit=false (paste path) -- fire() must NEVER auto-submit; no "\r" should
+  -- ever reach chansend, even after waiting past SUBMIT_DELAY_MS.
+  chansend_calls = {}
+  calls.send_to_terminal = {}
+  send._fire("hi\n", { submit = false, focus = true })
+
+  vim.wait(120)
+
+  local saw_cr = false
+  for _, c in ipairs(chansend_calls) do
+    if c.data == "\r" then
+      saw_cr = true
+    end
+  end
+  if saw_cr then
+    fail("paste path: chansend was called with \\r, expected no auto-submit")
+  end
+  if #calls.send_to_terminal ~= 1 or calls.send_to_terminal[1].send_opts.submit ~= false then
+    fail("paste path: send_to_terminal submit flag not preserved as false")
+  end
+  pass("fire() submit=false (paste): no auto-submit \\r sent to the terminal channel")
+
+  vim.fn.chansend = orig_chansend
+  vim.b[1].terminal_job_id = nil
+end
+
+-- ---------------------------------------------------------------------------------------
 -- M._delete_region: the delete-math cases the whole commit hinges on. Each case builds a
 -- fresh scratch buffer with known content, makes it CURRENT (getregion/getregionpos read
 -- the current buffer), calls M._delete_region directly, and asserts the exact resulting
