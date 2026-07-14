@@ -8,14 +8,22 @@ local function region_text(pos1, pos2, regtype, exclusive)
   return table.concat(lines, "\n")
 end
 
--- Workspace-relative path + line spec for the current buffer, or nil for an unnamed
--- buffer (no file to reference). `lines` is "54" for one line or "54-58" for a range.
-local function file_and_lines(startln, endln)
+-- Workspace-relative path of the current buffer, or nil for an unnamed buffer.
+local function current_file_path()
   local name = vim.api.nvim_buf_get_name(0)
   if name == "" then
     return nil
   end
-  local path = vim.fn.fnamemodify(name, ":.") -- relative to cwd when the file is under it
+  return vim.fn.fnamemodify(name, ":.") -- relative to cwd when the file is under it
+end
+
+-- Workspace-relative path + line spec for the current buffer, or nil for an unnamed
+-- buffer (no file to reference). `lines` is "54" for one line or "54-58" for a range.
+local function file_and_lines(startln, endln)
+  local path = current_file_path()
+  if not path then
+    return nil
+  end
   local lines = (startln == endln) and tostring(startln) or (startln .. "-" .. endln)
   return path, lines
 end
@@ -28,6 +36,104 @@ local function wrap_code(text)
   end
   return "`" .. text .. "`"
 end
+
+-- Delay between the bracketed paste and our own submit Enter. claudecode writes the
+-- paste and the CR in one chansend with no gap, so a warm TUI can swallow the CR into
+-- the paste block and the line never submits. We paste WITHOUT submit, then send Enter
+-- separately after this delay so the terminal has finished ingesting the paste first.
+-- Tunable; ~40ms is comfortable on a warm pane (cold start waits COLD_START_DELAY_MS below).
+local SUBMIT_DELAY_MS = 40
+
+-- Cold start: ensure_visible() may have just spawned Claude, whose TUI prompt isn't ready
+-- yet, so an immediate write can be silently dropped. When no pane existed, wait this long
+-- before sending. Longer than SUBMIT_DELAY_MS because a fresh process needs more slack.
+local COLD_START_DELAY_MS = 250
+
+-- Recover the terminal's job channel the way claudecode.terminal does internally (it does
+-- not expose this as public API), so we can write our own submit Enter to the PTY. Returns
+-- nil when there's no live channel.
+local function terminal_channel(bufnr)
+  local chan = vim.b[bufnr] and vim.b[bufnr].terminal_job_id
+  if not chan or chan == 0 then
+    chan = vim.bo[bufnr].channel
+  end
+  if not chan or chan == 0 then
+    return nil
+  end
+  return chan
+end
+
+-- show the pane and send; on_result(ok, existed) fires after the paste attempt. When
+-- submit is requested we send the Enter ourselves, a beat after the paste, so it can't
+-- race the bracketed-paste block (claudecode bundles paste+CR in one write).
+local function fire(payload, send_opts, on_result)
+  local terminal = require("claudecode.terminal")
+  local existed = terminal.get_active_terminal_bufnr() ~= nil
+  terminal.ensure_visible()
+  local function go()
+    -- Paste WITHOUT submit; we own the Enter (below) so it can be separated in time.
+    local ok = terminal.send_to_terminal(payload, { submit = false, focus = send_opts.focus })
+    if not ok then
+      vim.notify(
+        "[claude-assistant] send failed - needs the native/snacks provider and a Claude pane",
+        vim.log.levels.ERROR
+      )
+    elseif send_opts.submit then
+      local bufnr = terminal.get_active_terminal_bufnr()
+      local chan = bufnr and terminal_channel(bufnr)
+      if chan then
+        vim.defer_fn(function()
+          pcall(vim.fn.chansend, chan, "\r")
+        end, SUBMIT_DELAY_MS)
+      end
+    end
+    if on_result then
+      on_result(ok, existed)
+    end
+  end
+  if existed then
+    go()
+  else
+    vim.defer_fn(go, COLD_START_DELAY_MS)
+  end
+end
+
+M._fire = fire
+
+-- Register-safe, undoable deletion of a region -- called ONLY from quick_send's on_result,
+-- after a CONFIRMED send (never on cold start / failed send / blockwise). Uses the buffer
+-- API exclusively (nvim_buf_set_lines / nvim_buf_set_text), never a `d`-motion, so the
+-- unnamed register is untouched.
+local function delete_region(buf, pos1, pos2, regtype, exclusive)
+  if regtype == "V" then
+    -- Linewise: drop the whole line range.
+    local startln = math.min(pos1[2], pos2[2])
+    local endln = math.max(pos1[2], pos2[2])
+    vim.api.nvim_buf_set_lines(buf, startln - 1, endln, false, {})
+    return
+  end
+
+  -- Charwise: getregionpos (Neovim >= 0.10) returns byte positions honoring
+  -- type/exclusive/multibyte, so we don't hand-roll the inclusive-BYTE -> exclusive-col
+  -- conversion. For a multi-line charwise region it returns one {start, end} segment PER
+  -- LINE; the delete rect spans the first segment's start to the last segment's end, and
+  -- nvim_buf_set_text joins the first line's prefix with the last line's suffix in one
+  -- call -- exactly like a charwise `d`. Empirically confirmed (against a multibyte line,
+  -- e.g. "h\xC3\xA9llo\xE2\x86\x92\xE4\xB8\x96\xE7\x95\x8C"): each returned column is the
+  -- LAST byte (1-based) of the boundary character, which numerically equals the 0-based
+  -- EXCLUSIVE end column nvim_buf_set_text expects (1-based inclusive index X == 0-based
+  -- exclusive index X), so it's used as-is with no extra +/-1.
+  local regions = vim.fn.getregionpos(pos1, pos2, { type = regtype, exclusive = exclusive })
+  if not regions or #regions == 0 then
+    return
+  end
+  local first, last = regions[1][1], regions[#regions][2]
+  local srow, scol = first[2] - 1, first[3] - 1
+  local erow, ecol = last[2] - 1, last[3]
+  vim.api.nvim_buf_set_text(buf, srow, scol, erow, ecol, {})
+end
+
+M._delete_region = delete_region
 
 -- opts: { pos1, pos2, regtype, exclusive, linewise }
 local function do_send(action, opts)
@@ -70,28 +176,7 @@ local function do_send(action, opts)
     payload = payload .. "\n"
   end
 
-  local terminal = require("claudecode.terminal")
-  local existed = terminal.get_active_terminal_bufnr() ~= nil
-  terminal.ensure_visible() -- create/show the Claude pane without stealing focus
-  local function fire()
-    local ok = terminal.send_to_terminal(payload, {
-      submit = action ~= "paste", -- paste inserts without sending
-      focus = action == "paste", -- land in the prompt to keep typing
-    })
-    if not ok then
-      vim.notify(
-        "[claude-assistant] send failed - needs the native/snacks provider and a Claude pane",
-        vim.log.levels.ERROR
-      )
-    end
-  end
-  -- Cold start: ensure_visible() just spawned Claude; its TUI prompt is not ready,
-  -- so writing immediately can drop the first message. Defer only in that case.
-  if existed then
-    fire()
-  else
-    vim.defer_fn(fire, 250)
-  end
+  fire(payload, { submit = action ~= "paste", focus = action == "paste" })
 end
 
 -- Visual entrypoint. The x-mode mapping uses the :<C-u>...<CR> form so visual mode is
@@ -120,6 +205,140 @@ function M.make_opfunc(action)
       exclusive = false, -- '[ '] are always inclusive regardless of 'selection'
       linewise = kind == "line",
     })
+  end
+end
+
+-- Whole-file entrypoint: no selection involved, just the explain prompt plus a bare
+-- whole-file @-mention. Claude Code expands it and reads the entire file itself.
+function M.explain_file()
+  local cfg = require("claude-assistant.config").options
+  local path = current_file_path()
+  if not path then
+    vim.notify("[claude-assistant] no file to explain (unnamed buffer)", vim.log.levels.WARN)
+    return
+  end
+  local prompt = cfg.prompts.explain_file or cfg.prompts.explain
+  local payload = prompt .. "\n@" .. path .. "\n" -- multi-line -> bracketed paste
+  fire(payload, { submit = true, focus = false })
+end
+
+-- Uncommitted-diff review: send the working tree diff as raw text (no @-reference, no
+-- code wrap) with a configurable review prompt, submitted. Prefers `rtk git diff` when
+-- rtk is installed (it may add context on top of the raw diff), else falls back to
+-- `git diff HEAD`. Degrades gracefully: no repo / command error vs. a genuinely empty
+-- diff are distinguished so the user isn't left guessing, and an empty prompt is never
+-- sent. Runs asynchronously so a large/slow diff (or a hung rtk) never freezes the editor.
+function M.review_diff()
+  local cfg = require("claude-assistant.config").options
+  local has_rtk = vim.fn.executable("rtk") == 1
+  if not has_rtk and vim.fn.executable("git") == 0 then
+    vim.notify("[claude-assistant] neither rtk nor git is executable", vim.log.levels.WARN)
+    return
+  end
+  local cmd = has_rtk and { "rtk", "git", "diff" } or { "git", "diff", "HEAD" }
+  -- Run the diff OFF the main loop so a large/slow diff (or a hung rtk) never freezes
+  -- the editor. vim.system's callback runs off the main loop, so hop back onto it with
+  -- vim.schedule before touching vim.notify / the buffer / fire().
+  vim.system(cmd, { text = true }, function(res)
+    vim.schedule(function()
+      local diff = (res.stdout or ""):gsub("%s+$", "")
+      if diff == "" then
+        -- Empty stdout => no changes, regardless of exit code (rtk/git differ on a clean diff).
+        if res.code ~= 0 then
+          vim.notify("[claude-assistant] diff failed: " .. (res.stderr or ""), vim.log.levels.WARN)
+        else
+          vim.notify("[claude-assistant] no changes to review", vim.log.levels.INFO)
+        end
+        return
+      end
+      local payload = cfg.prompts.review_diff .. "\n" .. diff .. "\n" -- multi-line -> bracketed paste
+      fire(payload, { submit = true, focus = false })
+    end)
+  end)
+end
+
+-- Insert-mode quick-send: fire the current line as-is, then clear it (staying in
+-- insert mode) so the line becomes a scratch prompt buffer. Only clears once the
+-- send is CONFIRMED to have gone to an already-open pane -- on cold start (or a
+-- failed send) the text is kept, since it's the only copy the user has typed.
+function M.send_line_insert()
+  local win = vim.api.nvim_get_current_win()
+  local buf = vim.api.nvim_get_current_buf()
+  local row = vim.api.nvim_win_get_cursor(win)[1] - 1 -- 0-indexed
+  local text = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1] or ""
+  -- Strip leading indentation: the whitespace is editor auto-indent, not part of the
+  -- prompt. `indent` is kept so we can restore it after clearing (below).
+  local indent, prompt = text:match("^(%s*)(.*)$")
+  if prompt == "" then -- blank or whitespace-only line: nothing to send
+    return
+  end
+  -- Force-append a newline so a single-line payload containing "@" is bracketed-pasted
+  -- rather than typed char-by-char into Claude's interactive mention menu (same reason
+  -- do_send guarantees a trailing newline).
+  fire(prompt .. "\n", { submit = true, focus = false }, function(ok, existed)
+    if not (ok and existed) then
+      -- Cold start / failed send: keep the user's only copy of the text.
+      vim.notify("[claude-assistant] Sent - Claude pane was starting, text kept.", vim.log.levels.INFO)
+      return
+    end
+    if not vim.bo[buf].modifiable then
+      return -- sent to an open pane; read-only/special buffer, nothing to clear
+    end
+    -- The cursor may have moved, or the user may have kept typing during the
+    -- cold-start defer; only clear if the line still matches what was sent.
+    local cur = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1]
+    if cur == text then
+      -- Keep the indentation (not a bare "") and park the cursor after it, so the
+      -- next line continues at the same level instead of snapping to column 0.
+      vim.api.nvim_buf_set_lines(buf, row, row + 1, false, { indent }) -- register-safe, undoable
+      if vim.api.nvim_get_current_win() == win then
+        vim.api.nvim_win_set_cursor(win, { row + 1, #indent })
+      end
+    end
+  end)
+end
+
+-- Visual/motion quick-send: send the RAW region text as-is (no prompt prefix, no code
+-- wrap, no @-reference) and DELETE the region -- but ONLY once the send is CONFIRMED to
+-- have reached an already-open pane (same guard as send_line_insert). Cold start / failed
+-- send keeps the text; blockwise and read-only/special buffers are send-only (no delete).
+local function quick_send(pos1, pos2, regtype, exclusive)
+  local text = region_text(pos1, pos2, regtype, exclusive)
+  if not text or text == "" then
+    vim.notify("[claude-assistant] nothing selected", vim.log.levels.WARN)
+    return
+  end
+  local buf = vim.api.nvim_get_current_buf()
+  -- Keep the force-newline so a single-line raw payload with an embedded @ is
+  -- bracketed-pasted, not typed into Claude's mention menu (same rule as do_send).
+  local payload = text:find("\n", 1, true) and text or (text .. "\n")
+  fire(payload, { submit = true, focus = false }, function(ok, existed)
+    if not (ok and existed) then
+      vim.notify("[claude-assistant] Sent - Claude pane was starting, text kept.", vim.log.levels.INFO)
+      return
+    end
+    if not vim.bo[buf].modifiable then
+      return -- read-only/special buffer: send-only
+    end
+    if regtype == "\22" then
+      vim.notify("[claude-assistant] blockwise: sent, not deleted", vim.log.levels.INFO)
+      return
+    end
+    delete_region(buf, pos1, pos2, regtype, exclusive)
+  end)
+end
+
+-- Visual entrypoint (see M.send_visual for the :<C-u>...<CR> mark-commit rationale).
+function M.send_quick_visual()
+  local regtype = vim.fn.visualmode()
+  quick_send(vim.fn.getpos("'<"), vim.fn.getpos("'>"), regtype, nil)
+end
+
+-- Operator entrypoint: opfunc invoked by g@ with kind = 'line'|'char'|'block'.
+function M.make_quick_opfunc()
+  return function(kind)
+    local regtype = ({ line = "V", char = "v", block = "\22" })[kind] or "v"
+    quick_send(vim.fn.getpos("'["), vim.fn.getpos("']"), regtype, false)
   end
 end
 
